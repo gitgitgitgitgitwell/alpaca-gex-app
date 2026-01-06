@@ -285,7 +285,7 @@ def get_spot_price(ticker: str, stock_client: StockHistoricalDataClient) -> Opti
         req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
         resp = stock_client.get_stock_latest_quote(req)
         q = resp[ticker]
-        if q.ask_price and q.bid_price and q.ask_price > 0 and q.bid_price > 0:
+        if q.ask_price and q.bid_price and q.ask_price > 0 and q.bid_price > 0: 
             return float((q.ask_price + q.bid_price) / 2)
         if q.ask_price and q.ask_price > 0:
             return float(q.ask_price)
