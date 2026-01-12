@@ -66,8 +66,8 @@ st.title("Alpaca GEX Scanner")
 
 # Defaults (match your config)
 DEFAULT_TICKERS = ["SPY", "QQQ", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "CRDO", "APH", "ALAB",
-                   "ANET", "PRIM", "LRCX", "MOD", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR",
-                   "PRYMY", "SNDK", "AMZN", "BE", "WMB", "AR", "NVCR", "INTC", "RIVN", "POET", "DBRG"]
+                   "ANET", "PRIM", "LRCX", "AMBA", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR",
+                   "PRYMY", "SNDK", "AMZN", "BE", "WMB", "Q", "DIOD", "COHU", "ACMR", "LWLG", "WRD", "NVTS", "GSIT", "AR", "NVCR", "INTC", "RIVN", "POET", "DBRG"]
 
 # ----------------------------
 # Helpers
