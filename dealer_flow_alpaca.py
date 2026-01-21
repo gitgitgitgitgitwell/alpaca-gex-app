@@ -682,7 +682,7 @@ def fetch_today_rth_1m_bars_batched(
 
 
     # chunk symbols to avoid request limits
-    for i in range(0, len(tickers), chunk_size):
+'''    for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i : i + chunk_size]
 
         req = StockBarsRequest(
@@ -716,8 +716,29 @@ def fetch_today_rth_1m_bars_batched(
             bars_by_symbol[chunk[0]] = df[
                 ["open", "high", "low", "close", "volume"]
             ].dropna()
+'''
 
-    return bars_by_symbol
+        for t in tickers:
+            try:
+                req = StockBarsRequest(
+                    symbol_or_symbols=t,
+                    timeframe=TimeFrame.Minute,
+                    start=start,
+                    end=now,
+                    feed="iex",
+                )
+                resp = trading_client.get_stock_bars(req)
+                df = getattr(resp, "df", None)
+
+                if df is not None and not df.empty:
+                    bars_by_symbol[t] = df.xs(t, level=0) if isinstance(df.index, pd.MultiIndex) else df
+                    print(f"[VWAP] {t}: bars={len(bars_by_symbol[t])}")
+                else:
+                    print(f"[VWAP] {t}: no bars")
+
+            except Exception as e:
+                print(f"[VWAP] {t}: error {e}")
+        return bars_by_symbol
 
 # ========= RUN SCAN =========
 
@@ -786,7 +807,7 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
             bars = bars_by_symbol.get(t)
 
             print(f"[VWAP] {t}: bars={'None' if bars is None else len(bars)}")
-            
+
             if bars is not None and not bars.empty:
                 session_vwap, vwap_sigma = compute_session_vwap_and_sigma(bars)
 
