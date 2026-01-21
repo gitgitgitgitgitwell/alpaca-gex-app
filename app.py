@@ -6,15 +6,14 @@ import numpy as np
 
 import plotly.graph_objects as go
 import dealer_flow_alpaca
-"""st.caption(f"dealer_flow_alpaca path: {dealer_flow_alpaca.__file__}")"""
 from dealer_flow_alpaca import run_scan  # <-- change filename if needed
 
 st.set_page_config(page_title="Alpaca GEX Scanner", layout="wide")
 st.title("Alpaca GEX Scanner")
 
 # Defaults (match your config)
-DEFAULT_TICKERS = ["SPY", "QQQ", "TSM", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "CRDO", "APH", "ALAB",
-                   "ANET", "PRIM", "LRCX", "AMBA", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR", "FLNC", "LGN", "GTLB",
+DEFAULT_TICKERS = ["SPY", "QQQ", "TSM", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "APH",
+                   "ANET", "PRIM", "LRCX", "AMBA", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR", "SOLS", "FLNC", "LGN", "GTLB",
                    "PRYMY", "SNDK", "AMZN", "BE", "WMB", "Q", "DIOD", "COHU", "ACMR", "LWLG", "WRD", "NVTS", "GSIT", "AR", "NVCR", "INTC", "POET", "DBRG"]
 
 # ----------------------------
@@ -141,7 +140,6 @@ tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
 if run_btn:
     with st.spinner(f"Running scan for {len(tickers)} tickers..."):
         details, summary, narrative = run_scan(tickers)
-        """st.write("Narrative columns:", list(narrative.columns))"""
 
 
 
@@ -303,7 +301,7 @@ else:
 
             # Choose columns (only those that exist)
             preferred_cols = [
-                "ticker","spot","regime","confidence",
+                "ticker","regime","confidence", "spot",
                 "session_vwap","vwap_sigma","vwap_z",
                 "put_wall_strike","call_wall_strike","zero_gamma_strike",
                 "zg_dev_pct","zg_dist",

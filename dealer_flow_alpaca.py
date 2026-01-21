@@ -29,7 +29,7 @@ from alpaca.trading.enums import AssetStatus
 
 # ========= CONFIG =========
 
-TICKERS = ["SPY", "QQQ", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "CRDO", "APH", "ALAB", "ANET", "PRIM", "LRCX", "MOD", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR", "PRYMY", "SNDK", "AMZN", "BE", "WMB", "AR", "NVCR", "INTC", "RIVN", "POET", "DBRG"]
+TICKERS = ["SPY", "QQQ", "TSM", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "APH", "ANET", "PRIM", "LRCX", "MOD", "DOV", "AVGO", "SOLS", "SEI", "ABBNY", "VICR", "COHR", "PRYMY", "SNDK", "AMZN", "BE", "WMB", "AR", "NVCR", "INTC", "RIVN", "POET", "DBRG"]
 
 MAX_DAYS_TO_EXPIRY = 30
 CONTRACT_MULTIPLIER = 100.0
