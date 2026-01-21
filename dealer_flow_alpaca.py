@@ -1,5 +1,14 @@
 
 import os
+# ----------------------------
+# VWAP controls
+# ----------------------------
+# Streamlit Cloud can set env vars; locally you can just leave the default "1".
+COMPUTE_VWAP_METRICS = os.getenv("COMPUTE_VWAP_METRICS", "1").lower() in ("1", "true", "yes", "y")
+
+# optional: make the batch size configurable too
+VWAP_BARS_CHUNK_SIZE = int(os.getenv("VWAP_BARS_CHUNK_SIZE", "50"))
+
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -717,7 +726,7 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
             bars_by_symbol = fetch_today_rth_1m_bars_batched(
                 tickers=tickers,
                 stock_client=stock_client,
-                chunk_size=50,
+                chunk_size=VWAP_BARS_CHUNK_SIZE,
             )
         except Exception as e:
             print(f"[WARN] VWAP bars fetch failed: {e}")

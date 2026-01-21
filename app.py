@@ -129,6 +129,8 @@ with st.sidebar:
         value=",".join(DEFAULT_TICKERS),
         height=140
     )
+    compute_vwap = st.checkbox("Compute VWAP metrics (extra bar requests)", value=True)
+    dealer_flow_alpaca.COMPUTE_VWAP_METRICS = compute_vwap
 
     run_btn = st.button("Run scan", type="primary")
 
