@@ -65,9 +65,9 @@ st.set_page_config(page_title="Alpaca GEX Scanner", layout="wide")
 st.title("Alpaca GEX Scanner")
 
 # Defaults (match your config)
-DEFAULT_TICKERS = ["SPY", "QQQ", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "CRDO", "APH", "ALAB",
-                   "ANET", "PRIM", "LRCX", "AMBA", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR",
-                   "PRYMY", "SNDK", "AMZN", "BE", "WMB", "Q", "DIOD", "COHU", "ACMR", "LWLG", "WRD", "NVTS", "GSIT", "AR", "NVCR", "INTC", "RIVN", "POET", "DBRG"]
+DEFAULT_TICKERS = ["SPY", "QQQ", "TSM", "NVDA", "GOOGL", "RMBS", "VRT", "MRVL", "MU", "CRDO", "APH", "ALAB",
+                   "ANET", "PRIM", "LRCX", "AMBA", "DOV", "AVGO", "SEI", "ABBNY", "VICR", "COHR", "FLNC", "LGN", "GTLB",
+                   "PRYMY", "SNDK", "AMZN", "BE", "WMB", "Q", "DIOD", "COHU", "ACMR", "LWLG", "WRD", "NVTS", "GSIT", "AR", "NVCR", "INTC", "POET", "DBRG"]
 
 # ----------------------------
 # Helpers
@@ -128,6 +128,46 @@ def build_gamma_by_strike(details_df: pd.DataFrame, underlying: str, expiry: str
     agg["net_gex"] = agg["call_gex"] - agg["put_gex"]
     agg["abs_net"] = agg["net_gex"].abs()
     return agg
+
+
+# ----------------------------
+# Regime-aware metrics display helpers
+# ----------------------------
+def is_long_gamma_regime(regime: str) -> bool:
+    if not isinstance(regime, str):
+        return False
+    r = regime.upper()
+    return ("LONG GAMMA" in r) or ("MEAN-REVERT" in r) or ("PINNED" in r)
+
+def _color_vwap_z(val):
+    if pd.isna(val):
+        return ""
+    a = abs(float(val))
+    if a < 0.5:
+        return "background-color: rgba(0,255,0,0.12)"
+    if a < 1.0:
+        return "background-color: rgba(255,255,0,0.18)"
+    if a < 1.5:
+        return "background-color: rgba(255,165,0,0.22)"
+    return "background-color: rgba(255,0,0,0.22)"
+
+def _color_zg_dist(val):
+    if pd.isna(val):
+        return ""
+    v = float(val)
+    if v >= 1.5:
+        return "background-color: rgba(0,255,0,0.12)"
+    if v >= 1.0:
+        return "background-color: rgba(255,255,0,0.18)"
+    if v >= 0.7:
+        return "background-color: rgba(255,165,0,0.22)"
+    return "background-color: rgba(255,0,0,0.22)"
+
+def _grey_inactive_vwap(row: pd.Series):
+    active = bool(row.get("vwap_z_active", False))
+    if not active:
+        return ["color: rgba(255,255,255,0.45)" if c == "vwap_z" else "" for c in row.index]
+    return ["" for _ in row.index]
 
 # ----------------------------
 # Sidebar
@@ -282,7 +322,84 @@ else:
     # ========== Narrative ==========
     with tabs[3]:
         st.subheader("Narrative")
-        if isinstance(narrative, pd.DataFrame):
-            st.dataframe(narrative, use_container_width=True)
+
+        if isinstance(narrative, pd.DataFrame) and not narrative.empty:
+            df = narrative.copy()
+
+            # Back-compat: compute metrics if older scan doesn't include them
+            if "zg_dev_pct" not in df.columns and {"spot","zero_gamma_strike"}.issubset(df.columns):
+                df["zg_dev_pct"] = np.where(
+                    (pd.to_numeric(df["spot"], errors="coerce") != 0),
+                    (pd.to_numeric(df["spot"], errors="coerce") - pd.to_numeric(df["zero_gamma_strike"], errors="coerce"))
+                    / pd.to_numeric(df["spot"], errors="coerce") * 100.0,
+                    np.nan
+                )
+
+            if "zg_dist" not in df.columns and {"spot","put_wall_strike","zero_gamma_strike"}.issubset(df.columns):
+                spot = pd.to_numeric(df["spot"], errors="coerce")
+                zg = pd.to_numeric(df["zero_gamma_strike"], errors="coerce")
+                pw = pd.to_numeric(df["put_wall_strike"], errors="coerce")
+                denom = (pw - zg)
+                df["zg_dist"] = np.where(denom != 0, (spot - zg) / denom, np.nan)
+
+            # Regime-aware VWAP Z interpretation
+            if "vwap_z" in df.columns:
+                df["vwap_z_active"] = df.get("regime", "").apply(is_long_gamma_regime)
+            else:
+                df["vwap_z_active"] = False
+
+            # Choose columns (only those that exist)
+            preferred_cols = [
+                "ticker","spot","regime","confidence",
+                "session_vwap","vwap_sigma","vwap_z",
+                "put_wall_strike","call_wall_strike","zero_gamma_strike",
+                "zg_dev_pct","zg_dist",
+                "net_gex","call_gex_total","put_gex_total",
+                "oi_real_ratio","kept_contracts","moneyness_removed","oi_real_used","oi_proxy_used",
+                "summary"
+            ]
+            cols = [c for c in preferred_cols if c in df.columns]
+            view = df[cols].copy()
+
+            styled = (
+                view.style
+                    .apply(_grey_inactive_vwap, axis=1)
+                    .applymap(_color_vwap_z, subset=["vwap_z"] if "vwap_z" in view.columns else [])
+                    .applymap(_color_zg_dist, subset=["zg_dist"] if "zg_dist" in view.columns else [])
+                    .format({
+                        "spot":"{:.2f}",
+                        "session_vwap":"{:.2f}",
+                        "vwap_sigma":"{:.2f}",
+                        "vwap_z":"{:+.2f}",
+                        "put_wall_strike":"{:.2f}",
+                        "call_wall_strike":"{:.2f}",
+                        "zero_gamma_strike":"{:.2f}",
+                        "zg_dev_pct":"{:+.1f}%",
+                        "zg_dist":"{:.2f}",
+                        "net_gex":"{:+,.0f}",
+                        "call_gex_total":"{:+,.0f}",
+                        "put_gex_total":"{:+,.0f}",
+                        "oi_real_ratio":"{:.0%}",
+                    }, na_rep="—")
+            )
+
+            st.dataframe(styled, use_container_width=True, height=620)
+
+            # Optional quick risk panel: lowest ZG distance
+            if "zg_dist" in df.columns:
+                with st.expander("Risk panel: lowest ZG distance (structural fragility)", expanded=False):
+                    tmp = df[["ticker","zg_dist"]].copy()
+                    tmp["zg_dist"] = pd.to_numeric(tmp["zg_dist"], errors="coerce")
+                    tmp = tmp.dropna().sort_values("zg_dist").head(12)
+                    if not tmp.empty:
+                        fig = go.Figure()
+                        fig.add_bar(x=tmp["zg_dist"], y=tmp["ticker"], orientation="h")
+                        fig.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10))
+                        fig.update_xaxes(title="ZG distance (normalized)")
+                        fig.update_yaxes(title="")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.caption("No ZG distance values available.")
+
         else:
             st.write(narrative)
