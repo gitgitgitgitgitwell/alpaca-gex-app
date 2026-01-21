@@ -657,88 +657,62 @@ def compute_session_vwap_and_sigma(bars: pd.DataFrame):
 def fetch_today_rth_1m_bars_batched(
     tickers,
     stock_client,
-    chunk_size: int = 50,
+    chunk_size: int = 50,  # kept for signature compatibility
 ):
     """
-    Fetch today's 1-minute bars for many tickers in batches.
+    Fetch today's RTH 1-minute bars for tickers.
     Returns: dict[ticker] -> DataFrame(open, high, low, close, volume)
     """
     bars_by_symbol = {}
-
     if not tickers:
         return bars_by_symbol
 
     ny = ZoneInfo("America/New_York")
-
     now_utc = datetime.now(timezone.utc)
     now_ny = now_utc.astimezone(ny)
 
-    # RTH open today at 9:30am NY time
+    # 9:30am NY time -> UTC
     rth_open_ny = datetime.combine(now_ny.date(), time(9, 30), tzinfo=ny)
     start = rth_open_ny.astimezone(timezone.utc)
+    end = now_utc  # KEEP UTC
 
-    # end at "now"
-    now = now_utc
+    print(f"[VWAP] start={start} end={end} feed=iex")
 
+    # Single-symbol requests: prevents one bad symbol from poisoning the batch
+    for t in tickers:
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=t,
+                timeframe=TimeFrame.Minute,
+                start=start,
+                end=end,
+                feed="iex",  # IMPORTANT: avoids SIP entitlement error
+            )
 
-    # chunk symbols to avoid request limits
-'''    for i in range(0, len(tickers), chunk_size):
-        chunk = tickers[i : i + chunk_size]
+            resp = stock_client.get_stock_bars(req)  # <-- correct client
+            df = getattr(resp, "df", None)
 
-        req = StockBarsRequest(
-            symbol_or_symbols=chunk,
-            timeframe=TimeFrame.Minute,
-            start=start,
-            end=now,
-            feed="iex",
-        )
+            if df is None or df.empty:
+                print(f"[VWAP] {t}: no bars")
+                continue
 
-        resp = stock_client.get_stock_bars(req)
-        df = resp.df
-        print(f"[VWAP] chunk={chunk[:3]}... size={len(chunk)} df_empty={df is None or df.empty} rows={0 if df is None else len(df)}")
-
-
-        if df is None or df.empty:
-            continue
-
-        # Alpaca returns a MultiIndex (symbol, timestamp)
-        if isinstance(df.index, pd.MultiIndex):
-            for sym in chunk:
+            # df is typically MultiIndex (symbol, timestamp)
+            if isinstance(df.index, pd.MultiIndex):
                 try:
-                    sym_df = df.xs(sym)
-                    bars_by_symbol[sym] = sym_df[
-                        ["open", "high", "low", "close", "volume"]
-                    ].dropna()
-                except KeyError:
-                    bars_by_symbol[sym] = pd.DataFrame()
-        else:
-            # single-symbol fallback
-            bars_by_symbol[chunk[0]] = df[
-                ["open", "high", "low", "close", "volume"]
-            ].dropna()
-'''
+                    sym_df = df.xs(t, level=0)
+                except Exception:
+                    sym_df = df
+            else:
+                sym_df = df
 
-        for t in tickers:
-            try:
-                req = StockBarsRequest(
-                    symbol_or_symbols=t,
-                    timeframe=TimeFrame.Minute,
-                    start=start,
-                    end=now,
-                    feed="iex",
-                )
-                resp = trading_client.get_stock_bars(req)
-                df = getattr(resp, "df", None)
+            bars_by_symbol[t] = sym_df[["open", "high", "low", "close", "volume"]].dropna()
+            print(f"[VWAP] {t}: bars={len(bars_by_symbol[t])}")
 
-                if df is not None and not df.empty:
-                    bars_by_symbol[t] = df.xs(t, level=0) if isinstance(df.index, pd.MultiIndex) else df
-                    print(f"[VWAP] {t}: bars={len(bars_by_symbol[t])}")
-                else:
-                    print(f"[VWAP] {t}: no bars")
+        except Exception as e:
+            print(f"[VWAP] {t}: error {e}")
 
-            except Exception as e:
-                print(f"[VWAP] {t}: error {e}")
-        return bars_by_symbol
+    return bars_by_symbol
+
 
 # ========= RUN SCAN =========
 
