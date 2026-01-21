@@ -6,8 +6,7 @@ import numpy as np
 
 import plotly.graph_objects as go
 import dealer_flow_alpaca
-"""st.caption(f"dealer_flow_alpaca path: {dealer_flow_alpaca.__file__}")
-"""
+"""st.caption(f"dealer_flow_alpaca path: {dealer_flow_alpaca.__file__}")"""
 from dealer_flow_alpaca import run_scan  # <-- change filename if needed
 
 st.set_page_config(page_title="Alpaca GEX Scanner", layout="wide")
