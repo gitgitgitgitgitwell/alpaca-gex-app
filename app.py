@@ -191,6 +191,8 @@ tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
 if run_btn:
     with st.spinner(f"Running scan for {len(tickers)} tickers..."):
         details, summary, narrative = run_scan(tickers)
+        st.write(narrative[["ticker","session_vwap","vwap_sigma","vwap_z"]].head(10))
+
 
     st.session_state["details"] = details
     st.session_state["summary"] = summary
