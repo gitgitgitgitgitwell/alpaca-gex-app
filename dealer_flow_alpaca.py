@@ -637,7 +637,7 @@ import pandas as pd
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.requests import OptionChainRequest, StockLatestQuoteRequest, StockLatestTradeRequest
+from alpaca.data.requests import OptionChainRequest, StockLatestQuoteRequest, StockLatestTradeRequest, StockBarsRequest
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOptionContractsRequest
@@ -1250,6 +1250,78 @@ def english_summary_for_ticker(
         + expectation
     )
 
+def compute_session_vwap_and_sigma(bars: pd.DataFrame):
+    """
+    Compute session VWAP and volume-weighted standard deviation
+    using typical price (HLC3).
+    """
+    if bars is None or bars.empty:
+        return None, None
+
+    tp = (bars["high"] + bars["low"] + bars["close"]) / 3.0
+    vol = bars["volume"].astype(float)
+
+    v_sum = float(vol.sum())
+    if v_sum <= 0:
+        return None, None
+
+    vwap = float((tp * vol).sum() / v_sum)
+    var = float((vol * (tp - vwap) ** 2).sum() / v_sum)
+    sigma = float(var ** 0.5)
+
+    return vwap, sigma
+
+def fetch_today_rth_1m_bars_batched(
+    tickers,
+    stock_client,
+    chunk_size: int = 50,
+):
+    """
+    Fetch today's 1-minute bars for many tickers in batches.
+    Returns: dict[ticker] -> DataFrame(open, high, low, close, volume)
+    """
+    bars_by_symbol = {}
+
+    if not tickers:
+        return bars_by_symbol
+
+    now = datetime.now(timezone.utc)
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+
+    # chunk symbols to avoid request limits
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i : i + chunk_size]
+
+        req = StockBarsRequest(
+            symbol_or_symbols=chunk,
+            timeframe=TimeFrame.Minute,
+            start=start,
+            end=now,
+        )
+
+        resp = stock_client.get_stock_bars(req)
+        df = resp.df
+
+        if df is None or df.empty:
+            continue
+
+        # Alpaca returns a MultiIndex (symbol, timestamp)
+        if isinstance(df.index, pd.MultiIndex):
+            for sym in chunk:
+                try:
+                    sym_df = df.xs(sym)
+                    bars_by_symbol[sym] = sym_df[
+                        ["open", "high", "low", "close", "volume"]
+                    ].dropna()
+                except KeyError:
+                    bars_by_symbol[sym] = pd.DataFrame()
+        else:
+            # single-symbol fallback
+            bars_by_symbol[chunk[0]] = df[
+                ["open", "high", "low", "close", "volume"]
+            ].dropna()
+
+    return bars_by_symbol
 
 # ========= RUN SCAN =========
 
@@ -1266,6 +1338,24 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
     summaries: List[TickerSummary] = []
     ticker_stats: Dict[str, Dict[str, Any]] = {}
 
+    # ---- optional: prefetch intraday bars in batches (so VWAP is cheap) ----
+    bars_by_symbol = {}
+    if COMPUTE_VWAP_METRICS:
+        try:
+            bars_by_symbol = fetch_today_rth_1m_bars_batched(
+                tickers=tickers,
+                stock_client=stock_client,
+                chunk_size=50,
+            )
+        except Exception as e:
+            print(f"[WARN] VWAP bars fetch failed: {e}")
+            bars_by_symbol = {}
+
+    summaries: List[TickerSummary] = []
+    all_points: List[OptionPoint] = []
+    ticker_stats: Dict[str, Dict[str, Any]] = {}
+
+    # ---- PHASE 1: compute per-ticker stats (MUST be inside this loop) ----
     for t in tickers:
         spot = get_spot_price(t, stock_client) if USE_MONEYNESS_FILTER else None
         if spot is not None:
@@ -1291,120 +1381,132 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
         all_points.extend(pts)
         summaries.append(summarize_ticker(pts, t))
 
-# Session VWAP / sigma / z-score (optional)
-    session_vwap = None
-    vwap_sigma = None
-    vwap_z = None
-    if COMPUTE_VWAP_METRICS:
+        # ✅ Session VWAP / sigma / z-score (must be inside the ticker loop)
+        session_vwap = None
+        vwap_sigma = None
+        vwap_z = None
+
+        if COMPUTE_VWAP_METRICS:
             bars = bars_by_symbol.get(t)
-            session_vwap, vwap_sigma = compute_session_vwap_and_sigma(bars)
-    if spot is not None and session_vwap is not None and vwap_sigma is not None and vwap_sigma > 0:
+            if bars is not None and not bars.empty:
+                session_vwap, vwap_sigma = compute_session_vwap_and_sigma(bars)
+
+        if (
+            spot is not None
+            and session_vwap is not None
+            and vwap_sigma is not None
+            and vwap_sigma > 0
+        ):
             vwap_z = (float(spot) - float(session_vwap)) / float(vwap_sigma)
 
-    ticker_stats[t] = {
-        **stats,
-        "spot": spot,
-        "session_vwap": session_vwap,
-        "vwap_sigma": vwap_sigma,
-        "vwap_z": vwap_z,
-    }
+        ticker_stats[t] = {
+            **stats,
+            "spot": spot,
+            "session_vwap": session_vwap,
+            "vwap_sigma": vwap_sigma,
+            "vwap_z": vwap_z,
+        }
 
+    # ---- PHASE 2: build DataFrames (MUST be outside ticker loop) ----
     details_df = pd.DataFrame([p.__dict__ for p in all_points])
     summary_df = pd.DataFrame([s.__dict__ for s in summaries])
 
-        # Build narrative/regime dataframe
+    # ---- PHASE 3: narrative (MUST be outside ticker loop, inside this loop) ----
     narrative_rows: List[Dict[str, Any]] = []
+
     for _, row in summary_df.iterrows():
-            t = row["ticker"]
-            st = ticker_stats.get(t, {})
-            spot = st.get("spot", None)
+        t = row["ticker"]
+        st = ticker_stats.get(t, {})
+        spot = st.get("spot", None)
 
-            kept_contracts = int(st.get("kept_contracts", 0) or 0)
-            moneyness_removed = int(st.get("moneyness_removed", 0) or 0)
-            oi_real_used = int(st.get("oi_real_used", 0) or 0)
-            oi_proxy_used = int(st.get("oi_proxy_used", 0) or 0)
+        kept_contracts = int(st.get("kept_contracts", 0) or 0)
+        moneyness_removed = int(st.get("moneyness_removed", 0) or 0)
+        oi_real_used = int(st.get("oi_real_used", 0) or 0)
+        oi_proxy_used = int(st.get("oi_proxy_used", 0) or 0)
 
-    session_vwap = st.get("session_vwap", None)
-    vwap_sigma = st.get("vwap_sigma", None)
-    vwap_z = st.get("vwap_z", None)
+        session_vwap = st.get("session_vwap", None)
+        vwap_sigma = st.get("vwap_sigma", None)
+        vwap_z = st.get("vwap_z", None)
 
-    call_wall = row.get("call_wall_strike", None)
-    put_wall = row.get("put_wall_strike", None)
-    zg = row.get("zero_gamma_strike", None)
+        call_wall = row.get("call_wall_strike", None)
+        put_wall = row.get("put_wall_strike", None)
+        zg = row.get("zero_gamma_strike", None)
 
+        # Derived metrics (structural) — compute if possible, but don't gate the row
+        zg_dev_pct = None
+        zg_dist = None
+        s_spot = _safe_float(spot)
+        s_zg = _safe_float(zg)
+        s_put_wall = _safe_float(put_wall)
 
-    # Derived metrics (structural)
-    zg_dev_pct = None
-    zg_dist = None
-    s_spot = _safe_float(spot)
-    s_zg = _safe_float(zg)
-    s_put_wall = _safe_float(put_wall)
-    if s_spot is not None and s_zg is not None and s_spot != 0:
-        zg_dev_pct = (s_spot - s_zg) / s_spot * 100.0
-    if s_spot is not None and s_zg is not None and s_put_wall is not None:
-        denom = (s_put_wall - s_zg)
-        if denom != 0:
-            zg_dist = (s_spot - s_zg) / denom
+        if s_spot is not None and s_zg is not None and s_spot != 0:
+            zg_dev_pct = (s_spot - s_zg) / s_spot * 100.0
 
-            total_used = oi_real_used + oi_proxy_used
-            oi_real_ratio = (oi_real_used / total_used) if total_used > 0 else None
+        if s_spot is not None and s_zg is not None and s_put_wall is not None:
+            denom = (s_put_wall - s_zg)
+            if denom != 0:
+                zg_dist = (s_spot - s_zg) / denom
 
-            regime, confidence = classify_regime(
-                spot=_safe_float(spot),
-                net_gex=float(row["net_gex"]),
-                call_gex_total=float(row["call_gex_total"]),
-                put_gex_total=float(row["put_gex_total"]),
-                call_wall=_safe_float(call_wall),
-                put_wall=_safe_float(put_wall),
-                zero_gamma=_safe_float(zg),
-                kept_contracts=kept_contracts,
-                oi_real_ratio=oi_real_ratio,
-                ticker=t,
-            )
+        total_used = oi_real_used + oi_proxy_used
+        oi_real_ratio = (oi_real_used / total_used) if total_used > 0 else None
 
-            narrative = english_summary_for_ticker(
-                ticker=t,
-                spot=_safe_float(spot),
-                call_gex_total=float(row["call_gex_total"]),
-                put_gex_total=float(row["put_gex_total"]),
-                net_gex=float(row["net_gex"]),
-                call_wall=_safe_float(call_wall),
-                put_wall=_safe_float(put_wall),
-                zero_gamma=_safe_float(zg),
-                kept_contracts=kept_contracts,
-                moneyness_removed=moneyness_removed,
-                oi_real_used=oi_real_used,
-                oi_proxy_used=oi_proxy_used,
-            )
+        regime, confidence = classify_regime(
+            spot=_safe_float(spot),
+            net_gex=float(row["net_gex"]),
+            call_gex_total=float(row["call_gex_total"]),
+            put_gex_total=float(row["put_gex_total"]),
+            call_wall=_safe_float(call_wall),
+            put_wall=_safe_float(put_wall),
+            zero_gamma=_safe_float(zg),
+            kept_contracts=kept_contracts,
+            oi_real_ratio=oi_real_ratio,
+            ticker=t,
+        )
 
-            narrative_rows.append(
-                {
-                    "ticker": t,
-                    "spot": _safe_float(spot),
-                    "session_vwap": _safe_float(session_vwap),
-                    "vwap_sigma": _safe_float(vwap_sigma),
-                    "vwap_z": _safe_float(vwap_z),
-                    "regime": regime,
-                    "confidence": confidence,
-                    "oi_real_ratio": oi_real_ratio,
-                    "kept_contracts": kept_contracts,
-                    "moneyness_removed": moneyness_removed,
-                    "oi_real_used": oi_real_used,
-                    "oi_proxy_used": oi_proxy_used,
-                    "call_wall_strike": _safe_float(call_wall),
-                    "put_wall_strike": _safe_float(put_wall),
-                    "zero_gamma_strike": _safe_float(zg),
-                    "zg_dev_pct": _safe_float(zg_dev_pct),
-                    "zg_dist": _safe_float(zg_dist),
-                    "net_gex": float(row["net_gex"]),
-                    "call_gex_total": float(row["call_gex_total"]),
-                    "put_gex_total": float(row["put_gex_total"]),
-                    "summary": narrative,
-                }
-            )
+        narrative = english_summary_for_ticker(
+            ticker=t,
+            spot=_safe_float(spot),
+            call_gex_total=float(row["call_gex_total"]),
+            put_gex_total=float(row["put_gex_total"]),
+            net_gex=float(row["net_gex"]),
+            call_wall=_safe_float(call_wall),
+            put_wall=_safe_float(put_wall),
+            zero_gamma=_safe_float(zg),
+            kept_contracts=kept_contracts,
+            moneyness_removed=moneyness_removed,
+            oi_real_used=oi_real_used,
+            oi_proxy_used=oi_proxy_used,
+        )
+
+        narrative_rows.append({
+            "ticker": t,
+            "spot": _safe_float(spot),
+
+            "session_vwap": _safe_float(session_vwap),
+            "vwap_sigma": _safe_float(vwap_sigma),
+            "vwap_z": _safe_float(vwap_z),
+
+            "regime": regime,
+            "confidence": confidence,
+            "oi_real_ratio": oi_real_ratio,
+            "kept_contracts": kept_contracts,
+            "moneyness_removed": moneyness_removed,
+            "oi_real_used": oi_real_used,
+            "oi_proxy_used": oi_proxy_used,
+            "call_wall_strike": _safe_float(call_wall),
+            "put_wall_strike": _safe_float(put_wall),
+            "zero_gamma_strike": _safe_float(zg),
+            "zg_dev_pct": _safe_float(zg_dev_pct),
+            "zg_dist": _safe_float(zg_dist),
+            "net_gex": float(row["net_gex"]),
+            "call_gex_total": float(row["call_gex_total"]),
+            "put_gex_total": float(row["put_gex_total"]),
+            "summary": narrative,
+        })
 
     narrative_df = pd.DataFrame(narrative_rows)
     return details_df, summary_df, narrative_df
+
 
 
 # ========= MAIN =========
