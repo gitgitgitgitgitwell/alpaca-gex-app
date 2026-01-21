@@ -12,6 +12,8 @@ VWAP_BARS_CHUNK_SIZE = int(os.getenv("VWAP_BARS_CHUNK_SIZE", "50"))
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+from datetime import time
 
 import pandas as pd
 
@@ -666,8 +668,18 @@ def fetch_today_rth_1m_bars_batched(
     if not tickers:
         return bars_by_symbol
 
-    now = datetime.now(timezone.utc)
-    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    ny = ZoneInfo("America/New_York")
+
+    now_utc = datetime.now(timezone.utc)
+    now_ny = now_utc.astimezone(ny)
+
+    # RTH open today at 9:30am NY time
+    rth_open_ny = datetime.combine(now_ny.date(), time(9, 30), tzinfo=ny)
+    start = rth_open_ny.astimezone(timezone.utc)
+
+    # end at "now"
+    now = now_utc
+
 
     # chunk symbols to avoid request limits
     for i in range(0, len(tickers), chunk_size):
@@ -678,10 +690,13 @@ def fetch_today_rth_1m_bars_batched(
             timeframe=TimeFrame.Minute,
             start=start,
             end=now,
+            feed="iex",
         )
 
         resp = stock_client.get_stock_bars(req)
         df = resp.df
+        print(f"[VWAP] chunk={chunk[:3]}... size={len(chunk)} df_empty={df is None or df.empty} rows={0 if df is None else len(df)}")
+
 
         if df is None or df.empty:
             continue
@@ -769,6 +784,9 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
 
         if COMPUTE_VWAP_METRICS:
             bars = bars_by_symbol.get(t)
+
+            print(f"[VWAP] {t}: bars={'None' if bars is None else len(bars)}")
+            
             if bars is not None and not bars.empty:
                 session_vwap, vwap_sigma = compute_session_vwap_and_sigma(bars)
 
