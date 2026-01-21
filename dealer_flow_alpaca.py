@@ -718,35 +718,36 @@ def fetch_today_rth_1m_bars_batched(
 
 def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     option_client = get_option_data_client()
-    stock_client = get_stock_client()
+    stock_client = get_stock_client()  # <-- StockHistoricalDataClient
     trading_client: Optional[TradingClient] = None
 
     if USE_REAL_OPEN_INTEREST:
         print("Initializing TradingClient for real OI…")
         trading_client = get_trading_client()
 
+    # Containers
     all_points: List[OptionPoint] = []
     summaries: List[TickerSummary] = []
     ticker_stats: Dict[str, Dict[str, Any]] = {}
 
-    # ---- optional: prefetch intraday bars in batches (so VWAP is cheap) ----
-    bars_by_symbol = {}
+    # ---- optional: prefetch intraday bars (VWAP) ----
+    bars_by_symbol: Dict[str, pd.DataFrame] = {}
     if COMPUTE_VWAP_METRICS:
         try:
+            print("[VWAP] Prefetching RTH 1m bars (feed=iex)...")
+            # IMPORTANT: this function MUST use stock_client.get_stock_bars(...) and feed="iex"
             bars_by_symbol = fetch_today_rth_1m_bars_batched(
                 tickers=tickers,
                 stock_client=stock_client,
                 chunk_size=VWAP_BARS_CHUNK_SIZE,
             )
+            print(f"[VWAP] Prefetch done. tickers_with_bars={len(bars_by_symbol)} / {len(tickers)}")
         except Exception as e:
+            # If you still see SIP here, then the bars request is still defaulting to SIP somewhere.
             print(f"[WARN] VWAP bars fetch failed: {e}")
             bars_by_symbol = {}
 
-    summaries: List[TickerSummary] = []
-    all_points: List[OptionPoint] = []
-    ticker_stats: Dict[str, Dict[str, Any]] = {}
-
-    # ---- PHASE 1: compute per-ticker stats (MUST be inside this loop) ----
+    # ---- PHASE 1: compute per-ticker stats ----
     for t in tickers:
         spot = get_spot_price(t, stock_client) if USE_MONEYNESS_FILTER else None
         if spot is not None:
@@ -772,14 +773,13 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
         all_points.extend(pts)
         summaries.append(summarize_ticker(pts, t))
 
-        # ✅ Session VWAP / sigma / z-score (must be inside the ticker loop)
+        # ---- VWAP metrics (per ticker) ----
         session_vwap = None
         vwap_sigma = None
         vwap_z = None
 
         if COMPUTE_VWAP_METRICS:
             bars = bars_by_symbol.get(t)
-
             print(f"[VWAP] {t}: bars={'None' if bars is None else len(bars)}")
 
             if bars is not None and not bars.empty:
@@ -801,11 +801,11 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
             "vwap_z": vwap_z,
         }
 
-    # ---- PHASE 2: build DataFrames (MUST be outside ticker loop) ----
+    # ---- PHASE 2: build DataFrames ----
     details_df = pd.DataFrame([p.__dict__ for p in all_points])
     summary_df = pd.DataFrame([s.__dict__ for s in summaries])
 
-    # ---- PHASE 3: narrative (MUST be outside ticker loop, inside this loop) ----
+    # ---- PHASE 3: narrative ----
     narrative_rows: List[Dict[str, Any]] = []
 
     for _, row in summary_df.iterrows():
@@ -826,7 +826,7 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
         put_wall = row.get("put_wall_strike", None)
         zg = row.get("zero_gamma_strike", None)
 
-        # Derived metrics (structural) — compute if possible, but don't gate the row
+        # Derived metrics (structural)
         zg_dev_pct = None
         zg_dist = None
         s_spot = _safe_float(spot)
@@ -900,7 +900,6 @@ def run_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
 
     narrative_df = pd.DataFrame(narrative_rows)
     return details_df, summary_df, narrative_df
-
 
 
 # ========= MAIN =========
