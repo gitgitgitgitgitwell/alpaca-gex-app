@@ -6,8 +6,8 @@ import numpy as np
 
 import plotly.graph_objects as go
 import dealer_flow_alpaca
-st.caption(f"dealer_flow_alpaca path: {dealer_flow_alpaca.__file__}")
-
+"""st.caption(f"dealer_flow_alpaca path: {dealer_flow_alpaca.__file__}")
+"""
 from dealer_flow_alpaca import run_scan  # <-- change filename if needed
 
 st.set_page_config(page_title="Alpaca GEX Scanner", layout="wide")
@@ -142,7 +142,7 @@ tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
 if run_btn:
     with st.spinner(f"Running scan for {len(tickers)} tickers..."):
         details, summary, narrative = run_scan(tickers)
-        st.write("Narrative columns:", list(narrative.columns))
+        """st.write("Narrative columns:", list(narrative.columns))"""
 
 
 
