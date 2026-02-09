@@ -289,8 +289,43 @@ def build_option_points_for_ticker(
     print(f"\n=== Processing {ticker} ===")
 
     req = OptionChainRequest(underlying_symbol=ticker)
-    chain_snapshots: Dict[str, Any] = data_client.get_option_chain(req)
-    print(f"  Loaded {len(chain_snapshots)} snapshots from Alpaca")
+    from alpaca.common.exceptions import APIError
+
+    try:
+        chain_snapshots: Dict[str, Any] = data_client.get_option_chain(req)
+        print(f"  Loaded {len(chain_snapshots)} snapshots from Alpaca")
+
+    except APIError as e:
+        # Handle entitlement/credential issues gracefully (e.g., 401 Unauthorized)
+        msg = str(e)
+
+        # If it’s an auth/entitlement problem, skip ticker cleanly instead of crashing app
+        if "Unauthorized" in msg or "401" in msg or "403" in msg or "Forbidden" in msg:
+            print(f"  [WARN] Options snapshots not authorized for {ticker}. Skipping options chain. ({msg})")
+
+            # Return empty points + minimal stats so downstream code stays stable
+            empty_stats = {
+                "kept_contracts": 0,
+                "moneyness_removed": 0,
+                "oi_real_used": 0,
+                "oi_proxy_used": 0,
+                "oi_real_ratio": None,
+                "error": f"options_unauthorized: {msg}",
+            }
+            return [], empty_stats
+
+        # For non-auth API errors, also skip but record the reason
+        print(f"  [WARN] Options chain fetch failed for {ticker}. Skipping. ({msg})")
+        empty_stats = {
+            "kept_contracts": 0,
+            "moneyness_removed": 0,
+            "oi_real_used": 0,
+            "oi_proxy_used": 0,
+            "oi_real_ratio": None,
+            "error": f"options_chain_failed: {msg}",
+        }
+        return [], empty_stats
+
 
     points: List[OptionPoint] = []
     now = datetime.now(timezone.utc)
