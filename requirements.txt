@@ -2,3 +2,4 @@ streamlit
 pandas
 alpaca-py
 plotly>=5.18.0
+pytz
